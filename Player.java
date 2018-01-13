@@ -70,7 +70,7 @@ public class Player {
         
     }
 
-    private static Direction getRandom(Directions[] array) {
+    private static Direction getRandom(Direction[] array) {
         int rnd = new Random().nextInt(array.length);
         return array[rnd];
     }
@@ -109,29 +109,48 @@ public class Player {
         }
 
         while(true){
-
+            System.out.println("\n");
+            System.out.println(gc.round());
             for(int u =0; u< gc.myUnits().size(); u++){
                 if( gc.myUnits().get(u).unitType() == UnitType.Factory ){
+                    System.out.println("\tFactory");
                     factory = gc.myUnits().get(u);
                     if( gc.canProduceRobot( factory.id(), UnitType.Knight ) ){
                         gc.produceRobot( factory.id(), UnitType.Knight);
+
+                        System.out.println("\t\t Created Knight");
                     }
                     if( factory.structureGarrison().size() > 0){
                         Direction dir = getRandom(directions);
-                        if( gc.can_unload(factory.id(), dir) ){
+                        if( gc.canUnload(factory.id(), dir) ){
                             gc.unload(factory.id(), dir);
+
+                            System.out.println("\t\t\t Deployed knight");
                         }
                     }
                 }
                 if( gc.myUnits().get(u).unitType() == UnitType.Knight ){
-                    VecUnit nearby = gc.senseNearbyUnits( gc.myUnits().get(u).location().mapLocation() , 2 );
+                    Team op;
+                    if (gc.team()==Team.Red){
+                        op=Team.Blue;
+                    }
+                    else{
+                        op=Team.Red;
+                    }
+                    nearby = gc.senseNearbyUnitsByTeam(gc.myUnits().get(u).location().mapLocation() ,50,op);
+                    if (gc.canAttack(gc.myUnits().get(u).id(),nearby.get(0).id())){
+                        gc.attack(gc.myUnits().get(u).id(),nearby.get(0).id());
+                    }
+                    else{
+                        Direction dir = gc.myUnits().get(u).location().mapLocation().directionTo(nearby.get(0).location().mapLocation());
+                        if ( gc.canMove(gc.myUnits().get(u).id(),dir)){
+                            gc.moveRobot(gc.myUnits().get(u).id(),dir);
+                        }
+                    }
                 }
             }
+            System.out.println("\n");
             
-        }
-
-        while (true) {
-            gc.nextTurn();
         }
     }
 }
