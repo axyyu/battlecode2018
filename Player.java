@@ -100,11 +100,17 @@ public class Player {
             if ( a.unitType() == UnitType.Factory ){
                 factory = a;
                 while ( factory.health() != factory.maxHealth() ){
-                    if ( gc.canBuild( r.id(), factory.id() ) ){
+                    System.out.println(factory.health());
+                    
+                    if ( gc.canBuild( r.id(), factory.id() ) ){ // WOULD SAY TRUE, THEN BUILD WOULDN'T INCREASE THE HEALTH
+                        System.out.println("\tBUILDING");
                         gc.build( r.id(), factory.id() );
                     }
+                    
                     gc.nextTurn();
                 }
+
+                System.out.println("\n FACTORY AT FULL HEALTH \n");
             }
         }
 
