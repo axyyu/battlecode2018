@@ -31,6 +31,25 @@ class UnitData():
         self.role = role
         self.dest = dest
 
+
+"""
+Enemy Detection
+"""
+def get_enemy_team(my_team):
+    #Red is 0 Blue is 1
+    print(my_team)
+    if my_team == bc.Team.Red:
+        return bc.Team.Blue
+    return bc.Team.Red
+
+op_team = get_enemy_team(my_team)
+detected_Enemy=set()
+
+
+
+def detect_enemy(unit):
+    #Can improve by only looking at units at the edge of the visable map
+    detected_Enemy.add(gc.sense_nearby_units_by_team(unit.location.map_location(),999,op_team))
 """
 Helper Methods
 """
@@ -207,7 +226,6 @@ def testEarth():
     for unit in root:
         detect_enemy(unit)
         print(detected_Enemy)
-
 
 """
 Planet Control
