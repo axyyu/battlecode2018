@@ -26,7 +26,7 @@ HQ = headquarter maplocation
 Unit data
 """
 class UnitData():
-    __init__(self, unit, role, dest):
+    def __init__(self, unit, role, dest):
         self.unit = unit
         self.role = role
         self.dest = dest
@@ -41,11 +41,6 @@ def get_enemy_team(my_team):
     if my_team == bc.Team.Red:
         return bc.Team.Blue
     return bc.Team.Red
-
-op_team = get_enemy_team(my_team)
-detected_Enemy=set()
-
-
 
 def detect_enemy(unit):
     #Can improve by only looking at units at the edge of the visable map
@@ -70,12 +65,18 @@ def sense_karbonite(u,radius):
     for x in range(0,radius):
         for y in range(0,radius):
             if x!=0 and y!=0:
-                index_loc = map_location(loc.x+x,loc.y+y) # this is not correct but I can't find the correct syntax
-                if karbonite_at(index_loc):
-                    karbonite_loc.append(index_loc)
-                index_loc = map_location(loc.x-x,loc.y-y) # this is not correct but I can't find the correct syntax
-                if karbonite_at(index_loc):
-                    karbonite_loc.append(index_loc)
+                index_loc = bc.MapLocation(bc.Planet.Earth,loc.x+x,loc.y+y) # this is not correct but I can't find the correct syntax
+                try:
+                    if gc.karbonite_at(index_loc):
+                            karbonite_loc.append(index_loc)
+                except:
+                    pass
+                index_loc = bc.MapLocation(bc.Planet.Earth,loc.x-x,loc.y-y) # this is not correct but I can't find the correct syntax
+                try:
+                    if gc.karbonite_at(index_loc):
+                            karbonite_loc.append(index_loc)
+                except:
+                    pass
     return karbonite_loc
 
 
@@ -160,16 +161,21 @@ def worker(u):
     #Build factory code
     nearby = gc.sense_nearby_units(u.location.map_location(), 2)
     for units in nearby:
-        if units == bc.UnitType.Factory:
+        if units.unit_type == bc.UnitType.Factory:
             gc.build(u.id,units.id)
             return None
 
     #Mining code
-    nearby_karbonite = sense_karbonite(u, u.vision_range ** .5)
-    if (len(nearby_karbonite)>0)
+    #BUG Fundemental Error with the below line is that vision range is a circle and our sense nearby checks a box
+    #nearby_karbonite = sense_karbonite(u, u.vision_range ** .5) -- Line that doess not work
+
+    nearby_karbonite = sense_karbonite(u, 4)
+    print("ERROR")
+    temp=len(nearby_karbonite)
+    if temp>0:
         direction = u.location.map_location().direction_to(nearby_karbonite[0])
-        if can_harvest(u.id,direction):
-            harvest(u.id,direction)
+        if gc.can_harvest(u.id,direction):
+            gc.harvest(u.id,direction)
             return None
         else:
             if (gc.is_move_ready(u.id) and gc.can_move(u.id,direction)):
@@ -232,13 +238,20 @@ Planet Control
 """
 def earth():
     for u in gc.my_units():
-        unit_dict[u.unit_type]()
+        unit_dict[u.unit_type](u)
 def mars():
     pass
 
 """
 Running
 """
+
+# A GameController is the main type that you talk to the game with.
+# Its constructor will connect to a running game.
+gc = bc.GameController()
+my_team = gc.team()
+op_team = get_enemy_team(my_team)
+
 # Basic Constants
 directions = list(bc.Direction)
 unit_dict = {
@@ -251,22 +264,17 @@ unit_data = {}
 unit_ratio = {
     bc.UnitType.Worker: 2,
     bc.UnitType.Knight: 2,
-    bc.UnitType.Ranger: 1
+    bc.UnitType.Ranger: 1,
     bc.UnitType.Mage: 1
 }
 unit_count = {
     bc.UnitType.Worker: len(gc.my_units())
 }
 
-# A GameController is the main type that you talk to the game with.
-# Its constructor will connect to a running game.
-gc = bc.GameController()
-my_team = gc.team()
-op_team = get_enemy_team()
 
 
 # Communications for same planet
-unit_data[ gc.my_units()[0].id ] = {r:"root"}
+unit_data[ gc.my_units()[0].id ] = "root"
 enemy_loc = [u.location.map_location() for u in gc.starting_map(gc.planet()).initial_units if u.team == op_team]
 
 manage_upgrades()
