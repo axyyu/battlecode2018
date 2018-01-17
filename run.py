@@ -3,7 +3,7 @@ import battlecode as bc
 import random
 import sys
 import traceback
-# from math import sqrt
+import math
 
 """
 Brother? I'm your daddy!
@@ -24,7 +24,7 @@ HQ = headquarter maplocation
 """
 Parameters
 """
-mesh_radius = 1
+mesh_radius = 3
 
 """
 Enemy Detection
@@ -161,12 +161,25 @@ def closest_enemy(u):
 Friendly Detection
 """
 def create_friendly_mesh():
-    global mesh
+    global my_mesh
     planet_map = gc.starting_map(gc.planet())
-    mesh = [ [0 for y in range(planet_map.height)] for x in range(planet_map.width) ]
+    my_mesh = [ [0 for y in range(planet_map.height)] for x in range(planet_map.width) ]
     for u in gc.my_units():
-        loc = u.location.map_location()
-        mesh[loc.x][loc.y] = len(gc.sense_nearby_units_by_team(loc, mesh_radius, my_team))
+        if u.location.is_on_map():
+            loc = u.location.map_location()
+            my_mesh[loc.x][loc.y] = len(gc.sense_nearby_units_by_team(loc, mesh_radius, my_team))
+
+def create_enemy_mesh():
+    global op_mesh
+    planet_map = gc.starting_map(gc.planet())
+    op_mesh = [ [0 for y in range(planet_map.height)] for x in range(planet_map.width) ]
+    for u in enemy_loc:
+        if u.location.is_on_map():
+            loc = u.location.map_location()
+            try:
+                op_mesh[loc.x][loc.y] = len(gc.sense_nearby_units_by_team(loc, mesh_radius, op_team))
+            except:
+                op_mesh[loc.x][loc.y] = 1
 
 """
 Pathfinding
@@ -211,35 +224,82 @@ def find_path(start, end):
 
     return False
 
-def run_away(u): # Run away from enemy troops, used by worker
-    pass
+def group_up(u): # Workers to head toward factories
+    loc = u.location.map_location()
 
-def retreat(u): # Run away if outnumbered/outdps, for troops
-    pass
+    if len(gc.sense_nearby_units_by_team(u.location.map_location(), int(u.vision_range/2), my_team)) > min( len(gc.my_units()), math.exp(len(gc.my_units())) ) :
+        return True
 
-def wander(u):
-    current = u.location.map_location()
-    #HELLO
-    pass
+    planet_map = gc.starting_map(gc.planet())
+
+    max_friends = (0, None)
+    for x in range(planet_map.width):
+        for y in range(planet_map.height):
+            friends = my_mesh[x][y]
+            if friends > max_friends[0]:
+                max_friends = (friends, bc.MapLocation(gc.planet(), x, y) )
+
+    d = u.location.map_location().direction_to( max_friends[1] )
+    if gc.can_move(u.id,d):
+        gc.move_robot(u.id,d)
+        return False
+    else:
+        spread_out(u, d)
+
+def run_away(u): # Run away from enemy troops toward safety
+    loc = u.location.map_location()
+    enemies = op_mesh[loc.x][loc.y]
+    if enemies < my_mesh[loc.x][loc.y] + 1:
+        return False
+    planet_map = gc.starting_map(gc.planet())
+    for x in range(planet_map.width):
+        for y in range(planet_map.height):
+            friends = my_mesh[x][y] + 1
+            if friends > enemies:
+                d = u.location.map_location().direction_to( bc.MapLocation(gc.planet(), x, y) )
+                if gc.can_move(u.id,d):
+                    gc.move_robot(u.id,d)
+                    return True
+                else:
+                    spread_out(u, d)
+                    return True
+    return True
 
 def move_toward_enemy(u, en): # move toward known enemy location
     if u.id in unit_dest:
         unit_dest.pop(u.id, None)
-    d=u.location.map_location().direction_to(en.location.map_location())
+    d = u.location.map_location().direction_to(en.location.map_location())
     if gc.can_move(u.id,d):
         gc.move_robot(u.id,d)
     else:
         spread_out(u, d)
+
+def kite(u, en):
+    d = u.location.map_location().distance_squared_to(en.location.map_location())
+    ran = en.vision_range
+    try:
+        ran = en.attack_range()
+    except:
+        pass
+    if d > ran or u.attack_range() < d:
+        move_toward_enemy(u, en)
+    else:
+        print("KITING")
+        di = u.location.map_location().direction_to(en.location.map_location()).opposite()
+        if gc.can_move(u.id,di):
+            gc.move_robot(u.id,di)
+        else:
+            spread_out(u, di)
 
 def spread_out(u, d): # walk away from friendly troops if they are right next to you
     left = right = d
     for a in range( int(len(directions)/2) ):
         left = left.rotate_left()
         right = right.rotate_right()
-        if gc.can_move(u.id, left):
+        if gc.is_move_ready(u.id) and gc.can_move(u.id, left):
             gc.move_robot(u.id, left)
             return
-        if gc.can_move(u.id, right):
+        if gc.is_move_ready(u.id) and gc.can_move(u.id, right):
             gc.move_robot(u.id, right)
             return
 
@@ -252,24 +312,14 @@ def move_toward_dest(u, en): # move toward destination if dest exists
             unit_dest.pop(u.id, None)
             spread_out(u, d)
     else:
-        move_toward_enemy(u, en)
+        kite(u, en)
 
 """
 Unit Management
 """
 def worker(u):
+    global blue_count
     if u.location.is_on_map():
-        #TODO Run Away?
-
-        #Build factory
-        if gc.karbonite() >= bc.UnitType.Factory.blueprint_cost():
-            closest_en = closest_enemy(u)
-            if closest_en:
-                direction = u.location.map_location().direction_to(closest_en.location.map_location()).opposite()
-                if gc.can_blueprint(u.id, bc.UnitType.Factory, direction):
-                    gc.blueprint(u.id, bc.UnitType.Factory, direction)
-                    return None
-
         #Replicate worker
         if gc.karbonite() >= 15:
             nu = next_unit()
@@ -287,6 +337,33 @@ def worker(u):
                     gc.build(u.id,units.id)
                     return None
 
+        #Build factory
+        if gc.karbonite() >= bc.UnitType.Factory.blueprint_cost() and unit_count[bc.UnitType.Factory] >= blue_count:
+            print("CAN BUILD FACTORY")
+            closest_en = closest_enemy(u)
+            if closest_en:
+                direction = u.location.map_location().direction_to(closest_en.location.map_location()).opposite()
+                if gc.can_blueprint(u.id, bc.UnitType.Factory, direction):
+                    gc.blueprint(u.id, bc.UnitType.Factory, direction)
+                    blue_count+=1
+                else:
+                    d = direction
+                    for a in range( int(len(directions)/2) ):
+                        d.rotate_left()
+                        if gc.can_blueprint(u.id, bc.UnitType.Factory, d):
+                            gc.blueprint(u.id, bc.UnitType.Factory, d)
+                            blue_count+=1
+                            break
+            else:
+                d = random.choice(directions)
+                for a in range( int(len(directions)/2) ):
+                    d.rotate_left()
+                    if gc.can_blueprint(u.id, bc.UnitType.Factory, d):
+                        gc.blueprint(u.id, bc.UnitType.Factory, d)
+                        blue_count+=1
+                        break
+            return None
+
         #Mining code
         sense_karbonite(u)
         bk = best_karbonite(u)
@@ -295,66 +372,77 @@ def worker(u):
             if gc.can_harvest(u.id,direction):
                 gc.harvest(u.id,direction)
                 return None
-            else:
-                if (gc.is_move_ready(u.id) and gc.can_move(u.id,direction)):
-                    gc.move_robot(u.id,direction)
-                    return None
 
-        #Random movement code
-        for d in directions:
-            if gc.is_move_ready(u.id):
-                if gc.can_move(u.id,d):
-                    gc.move_robot(u.id,d)
-                    return None
+
+        # Movement code
+        if gc.is_move_ready(u.id):
+            if not run_away(u):
+                if group_up(u):
+                    if gc.can_move(u.id, u.location.map_location().direction_to(bk)):
+                        gc.move_robot(u.id, u.location.map_location().direction_to(bk))
+                        return None
+
 def knight(u):
     if u.location.is_on_map():
         closest_en = closest_enemy(u)
         if closest_en:
-            if gc.is_attack_ready(u.id):
-                if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
-                    gc.attack(u.id,closest_en.id)
-            if gc.is_move_ready(u.id):
+            if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
+                if gc.is_attack_ready(u.id):
+                    if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
+                        gc.attack(u.id,closest_en.id)
+
+        if gc.is_move_ready(u.id):
+            if not run_away(u):
                 if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
                     move_toward_enemy(u, closest_en)
                 else:
-                    if u.id not in unit_dest:
-                        path = find_path( u.location.map_location(), closest_en.location.map_location() )
-                        if path:
-                            unit_dest[u.id] = path
+                    path = find_path( u.location.map_location(), closest_en.location.map_location() )
+                    if path:
+                        unit_dest[u.id] = path
                     move_toward_dest(u, closest_en)
-        else:
-            pass
-            # wander(u)
 
     return None
 def ranger(u):
     if u.location.is_on_map():
         closest_en = closest_enemy(u)
         if closest_en:
-            if gc.is_attack_ready(u.id):
-                if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
-                    gc.attack(u.id,closest_en.id)
-            if gc.is_move_ready(u.id):
-                if u.id in unit_dest:
-                    move_toward_dest()
-                d=u.location.map_location().direction_to(closest_en.location.map_location())
-                if gc.can_move(u.id,d):
-                    gc.move_robot(u.id,d)
+            if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
+                if gc.is_attack_ready(u.id):
+                    if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
+                        gc.attack(u.id,closest_en.id)
+
+        if gc.is_move_ready(u.id):
+            if not run_away(u):
+                if closest_en:
+                    if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
+                        kite(u, closest_en)
+                        return None
+                path = find_path( u.location.map_location(), closest_en.location.map_location() )
+                if path:
+                    unit_dest[u.id] = path
+                move_toward_dest(u, closest_en)
+
+    return None
 def mage(u):
     if u.location.is_on_map():
         closest_en = closest_enemy(u)
         if closest_en:
-            if gc.is_attack_ready(u.id):
-                #BUG this is actually dumb, but can_attack is the one returning the error
-                if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
-                    gc.attack(u.id,closest_en.id)
-                #     return None
-            if gc.is_move_ready(u.id):
-                if u.id in unit_dest:
-                    move_toward_dest()
-                d=u.location.map_location().direction_to(closest_en.location.map_location())
-                if gc.can_move(u.id,d):
-                    gc.move_robot(u.id,d)
+            if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
+                if gc.is_attack_ready(u.id):
+                    if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
+                        gc.attack(u.id,closest_en.id)
+
+        if gc.is_move_ready(u.id):
+            if not run_away(u):
+                if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
+                    move_toward_enemy(u, closest_en)
+                else:
+                    path = find_path( u.location.map_location(), closest_en.location.map_location() )
+                    if path:
+                        unit_dest[u.id] = path
+                    move_toward_dest(u, closest_en)
+
+    return None
 def healer(u):
     pass
 def factory(u):
@@ -373,8 +461,8 @@ def factory(u):
             return None
 
     nu = next_unit()
-    if nu != bc.UnitType.Worker and gc.can_produce_robot(u.id, nu):
-        gc.produce_robot(u.id, nu)
+    if gc.can_produce_robot(u.id, bc.UnitType.Ranger):
+        gc.produce_robot(u.id, bc.UnitType.Ranger)
     return None
 def rocket(u):
 #    if gc.can_launch_rocket(u.id,
@@ -398,11 +486,13 @@ def earth():
         print(len(enemy_loc))
         verify_enemy()
         count_units()
-        # create_mesh()
+        create_friendly_mesh()
+        create_enemy_mesh()
+        unit_ratio[bc.UnitType.Ranger] += 1
         for u in gc.my_units():
             # print(u.unit_type)
-            detect_enemy(u)
             unit_dict[u.unit_type](u)
+            detect_enemy(u)
         next_turn()
 def mars():
     # sense_karbonite(u)
@@ -444,8 +534,12 @@ unit_count = {
 
 # Communications for same planet
 enemy_loc = [u for u in gc.starting_map(gc.planet()).initial_units if u.team == op_team]
+enemy_targets = []
 karbonite_loc = []
-mesh = None
+op_mesh = None
+my_mesh = None
+
+blue_count = 0
 
 manage_upgrades()
 
