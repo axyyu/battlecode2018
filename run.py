@@ -75,6 +75,16 @@ def next_unit():
 """
 karbonite
 """
+def detect_karbonite():
+    planet_map = gc.starting_map(gc.planet())
+
+    for x in range(planet_map.width):
+        for y in range(planet_map.height):
+            loc = bc.MapLocation(gc.planet(),x,y)
+            if planet_map.on_map(loc):
+                if gc.karbonite_at(loc) > 0:
+                    karbonite_loc.append(index_loc)
+
 def sense_karbonite(u):
     if u.location.is_on_map():
         loc = u.location.map_location()
@@ -87,6 +97,9 @@ def sense_karbonite(u):
                     if gc.karbonite_at(index_loc) > 0:
                         if index_loc not in karbonite_loc:
                             karbonite_loc.append(index_loc)
+                    else:
+                        if index_loc in karbonite_loc:
+                            karbonite_loc.remove(index_loc)
                 except:
                     pass
 
@@ -120,7 +133,8 @@ def verify_enemy():
     #         enemy_loc.remove(en)
     for en in enemy_loc:
         try:
-            gc.sense_unit_at_location(en.location.map_location())
+            if not gc.can_sense_unit(en.id):
+                enemy_loc.remove(en)
         except Exception as e:
             if str(e) != "b'The location is outside your vision range.'":
                 enemy_loc.remove(en)
@@ -162,6 +176,7 @@ def find_path(start, end):
 
         direction = loc.direction_to(end)
         if direction == bc.Direction.Center:
+            print("\n CREATED PATH \n")
             return path
 
         new_path = path[:].append(direction)
@@ -180,21 +195,25 @@ def find_path(start, end):
 
     return False
 
-def run_away(): # Run away from enemy troops, used by worker
+def run_away(u): # Run away from enemy troops, used by worker
     pass
 
-def retreat(): # Run away if outnumbered/outdps, for troops
+def retreat(u): # Run away if outnumbered/outdps, for troops
     pass
 
 def move_toward_enemy(u, en): # move toward known enemy location
+    if u.id in unit_dest:
+        unit_dest.pop(u.id, None)
     d=u.location.map_location().direction_to(en.location.map_location())
     if gc.can_move(u.id,d):
         gc.move_robot(u.id,d)
     else:
-        spread_out()
+        spread_out(u)
 
-def spread_out(): # walk away from friendly troops if they are right next to you
-    pass
+def spread_out(u, d): # walk away from friendly troops if they are right next to you
+    left, right = d
+    for a in range(directions):
+        pass
 
 def move_toward_dest(u, en): # move toward destination if dest exists
     if u.id in unit_dest:
@@ -241,6 +260,7 @@ def worker(u):
                     return None
 
         #Mining code
+        sense_karbonite(u)
         bk = best_karbonite(u)
         if bk:
             direction = u.location.map_location().direction_to(bk)
@@ -341,9 +361,10 @@ def testEarth():
 Planet Control
 """
 def earth():
-    sense_karbonite(u)
+    # detect_karbonite()
     while True:
         print("EARTH CODE {}, K: {} \n".format(gc.round(), gc.karbonite()))
+        print(len(enemy_loc))
         verify_enemy()
         count_units()
         for u in gc.my_units():
