@@ -160,10 +160,13 @@ def closest_enemy(u):
 """
 Friendly Detection
 """
-def create_mesh():
+def create_friendly_mesh():
+    global mesh
+    planet_map = gc.starting_map(gc.planet())
+    mesh = [ [0 for y in range(planet_map.height)] for x in range(planet_map.width) ]
     for u in gc.my_units():
         loc = u.location.map_location()
-        # mesh[loc] = len(gc.sense_nearby_units_by_team(loc, mesh_radius, my_team))
+        mesh[loc.x][loc.y] = len(gc.sense_nearby_units_by_team(loc, mesh_radius, my_team))
 
 """
 Pathfinding
@@ -429,10 +432,10 @@ unit_dict = {
 unit_dest = {}
 unit_ratio = {
     bc.UnitType.Worker: 5,
-    bc.UnitType.Knight: 10,
-    bc.UnitType.Ranger: 8,
-    bc.UnitType.Mage: 8
+    bc.UnitType.Ranger: 20,
+    # bc.UnitType.Mage: 10
 }
+    # bc.UnitType.Knight: 10,
 unit_count = {
     bc.UnitType.Worker: len(gc.my_units())
 }
@@ -442,7 +445,7 @@ unit_count = {
 # Communications for same planet
 enemy_loc = [u for u in gc.starting_map(gc.planet()).initial_units if u.team == op_team]
 karbonite_loc = []
-mesh = {}
+mesh = None
 
 manage_upgrades()
 
