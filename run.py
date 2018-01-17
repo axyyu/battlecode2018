@@ -22,14 +22,9 @@ HQ = headquarter maplocation
 """
 
 """
-Unit data
+Parameters
 """
-class UnitData():
-    def __init__(self, unit, role, dest):
-        self.unit = unit
-        self.role = role
-        self.dest = dest
-
+mesh_radius = 1
 
 """
 Enemy Detection
@@ -44,6 +39,7 @@ def get_enemy_team(my_team):
 def detect_enemy(unit):
     #Can improve by only looking at units at the edge of the visable map
     detected_Enemy.add(gc.sense_nearby_units_by_team(unit.location.map_location(),999,op_team))
+
 """
 Helper Methods
 """
@@ -57,9 +53,9 @@ def manage_upgrades():
         gc.queue_research(u)
 
 def count_units():
+    for t in bc.UnitType:
+        unit_count[t] = 0
     for u in gc.my_units():
-        if u.unit_type not in unit_count:
-            unit_count[u.unit_type] = 0
         unit_count[u.unit_type] += 1
 
 def next_unit():
@@ -162,6 +158,14 @@ def closest_enemy(u):
         return None
 
 """
+Friendly Detection
+"""
+def create_mesh():
+    for u in gc.my_units():
+        loc = u.location.map_location()
+        # mesh[loc] = len(gc.sense_nearby_units_by_team(loc, mesh_radius, my_team))
+
+"""
 Pathfinding
 """
 def find_path(start, end):
@@ -185,13 +189,22 @@ def find_path(start, end):
         if my_map.on_map(new_loc) and my_map.is_passable_terrain_at(new_loc):
             fringe.append( (new_loc, new_path) )
         else:
-            for d in directions:
-                if d != direction:
-                    new_path = path[:].append(d)
-                    new_loc = loc.add(d)
+            left = right = direction
+            for a in range( int(len(directions)/2) ):
+                left = left.rotate_left()
+                right = right.rotate_right()
 
-                    if my_map.on_map(new_loc) and my_map.is_passable_terrain_at(new_loc):
-                        fringe.append( (new_loc, new_path) )
+                new_path = path[:].append(left)
+                new_loc = loc.add(left)
+
+                if my_map.on_map(new_loc) and my_map.is_passable_terrain_at(new_loc):
+                    fringe.append( (new_loc, new_path) )
+
+                new_path = path[:].append(right)
+                new_loc = loc.add(right)
+
+                if my_map.on_map(new_loc) and my_map.is_passable_terrain_at(new_loc):
+                    fringe.append( (new_loc, new_path) )
 
     return False
 
@@ -201,6 +214,11 @@ def run_away(u): # Run away from enemy troops, used by worker
 def retreat(u): # Run away if outnumbered/outdps, for troops
     pass
 
+def wander(u):
+    current = u.location.map_location()
+    #HELLO
+    pass
+
 def move_toward_enemy(u, en): # move toward known enemy location
     if u.id in unit_dest:
         unit_dest.pop(u.id, None)
@@ -208,12 +226,19 @@ def move_toward_enemy(u, en): # move toward known enemy location
     if gc.can_move(u.id,d):
         gc.move_robot(u.id,d)
     else:
-        spread_out(u)
+        spread_out(u, d)
 
 def spread_out(u, d): # walk away from friendly troops if they are right next to you
-    left, right = d
-    for a in range(directions):
-        pass
+    left = right = d
+    for a in range( int(len(directions)/2) ):
+        left = left.rotate_left()
+        right = right.rotate_right()
+        if gc.can_move(u.id, left):
+            gc.move_robot(u.id, left)
+            return
+        if gc.can_move(u.id, right):
+            gc.move_robot(u.id, right)
+            return
 
 def move_toward_dest(u, en): # move toward destination if dest exists
     if u.id in unit_dest:
@@ -222,7 +247,7 @@ def move_toward_dest(u, en): # move toward destination if dest exists
             gc.move_robot(u.id,d)
         else:
             unit_dest.pop(u.id, None)
-            spread_out(u)
+            spread_out(u, d)
     else:
         move_toward_enemy(u, en)
 
@@ -294,6 +319,9 @@ def knight(u):
                         if path:
                             unit_dest[u.id] = path
                     move_toward_dest(u, closest_en)
+        else:
+            pass
+            # wander(u)
 
     return None
 def ranger(u):
@@ -367,6 +395,7 @@ def earth():
         print(len(enemy_loc))
         verify_enemy()
         count_units()
+        # create_mesh()
         for u in gc.my_units():
             # print(u.unit_type)
             detect_enemy(u)
@@ -413,6 +442,7 @@ unit_count = {
 # Communications for same planet
 enemy_loc = [u for u in gc.starting_map(gc.planet()).initial_units if u.team == op_team]
 karbonite_loc = []
+mesh = {}
 
 manage_upgrades()
 
