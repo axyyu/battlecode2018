@@ -352,7 +352,7 @@ def earth():
             unit_dict[u.unit_type](u)
         next_turn()
 def mars():
-    sense_karbonite(u)
+    # sense_karbonite(u)
     while True:
         next_turn()
 
