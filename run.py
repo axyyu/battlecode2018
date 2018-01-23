@@ -1,5 +1,6 @@
 #Battlecode
 import battlecode as bc
+import numpy as np
 import random
 import sys
 import traceback
@@ -8,37 +9,86 @@ import math
 """
 Brother? I'm your daddy!
 
-Strategy:
- - Knights/Blitz
+New Plan:
+    Earth
+ - Start by scanning for karbonite locations
+ - Workers sprint to build factories in the same location, workers stay together in a group
+ - Troops move together in formations, never too far away from friendly troops (3 - 5 distance)
+ - Build rockets as soon as troop quota is reached, but only populate if not in battle
 
-Help:
+    Mars
+ - spread out across the map to have vision of every sqaure, report rocket landing location to swarm with nearby troops
+ - land in all areas (those unreachable by walking)
 
-UnitData = dict of units and their respective data not included
-    role?
-    destination?
+    Both
+ - Scan map for empty areas, create matrix of map in numpy (1 for passible terrain, 0 for unpassable)
+ - Create gradients of friendly and enemy concentrations (steepest gradient can be used as attack or run away)
+ - Map out enemy team through "scouts" (we can randomly spawn workers that int into the enemy and gather data, every 50 rounds or so when we aren't in a firefight)
 
-Root = starting worker where headquarter is
-HQ = headquarter maplocation
+Troops:
+ - Single-target attack
+    Priority Targets - look at health, then at troop & range (mages, ranger, knight), factory, worker
+ - Knight (mid game, half, front line), too little range
+ - Rangers (early game, half, back line)
+ - Mages (late game)
+ - Healers (3 to a unit) - cancel ranger dmg
+ - Max number of troops to prevent extreme runtime (or save a copy of a previous unit's settings for future units)
+ - Unit ratios that change throughout the game, groups of enemies together -> mages, single knights -> more rangers, etc
+
 """
 
 """
 Parameters
 """
 mesh_radius = 3
+unit_limit = 300
+params = {
+    bc.UnitType.Worker : {
+        "ratio" : 0.15,
+        "count" : 0
+    },
+    bc.UnitType.Knight : {
+        "ratio" : 0.02,
+        "count" : 0
+    },
+    bc.UnitType.Ranger : {
+        "ratio" : 0.6,
+        "count" : 0
+    },
+    bc.UnitType.Mage : {
+        "ratio" : 0.03,
+        "count" : 0
+    },
+    bc.UnitType.Healer : {
+        "ratio" : 0.2,
+        "count" : 0
+    }
+}
+buildings = {
+    bc.UnitType.Factory : {
+        "ratio" : 0,
+        "count" : 0,
+        "cap" : 4
+    },
+    bc.UnitType.Rocket :{
+        "ratio": 0,
+        "count": 0,
+        "cap" : 1
+    }
+}
 
 """
-Enemy Detection
+Data
 """
-def get_enemy_team(my_team):
-    #Red is 0 Blue is 1
-    print(my_team)
-    if my_team == bc.Team.Red:
-        return bc.Team.Blue
-    return bc.Team.Red
+earth_mesh = []
+mars_mesh = []
 
-def detect_enemy(unit):
-    #Can improve by only looking at units at the edge of the visable map
-    detected_Enemy.add(gc.sense_nearby_units_by_team(unit.location.map_location(),999,op_team))
+enemies = []
+enemy_mesh = []
+friendly_mesh = []
+unit_grad = []
+
+directions = list(bc.Direction)
 
 """
 Helper Methods
@@ -47,40 +97,84 @@ def next_turn():
     gc.next_turn()
     sys.stdout.flush()
     sys.stderr.flush()
+
+def get_enemy_team(my_team):
+    if my_team == bc.Team.Red:
+        return bc.Team.Blue
+    return bc.Team.Red
+
+"""
+Upgrades
+"""
 def manage_upgrades():
-    upgrades = [bc.UnitType.Worker, bc.UnitType.Knight, bc.UnitType.Ranger, bc.UnitType.Mage, bc.UnitType.Rocket]
+    upgrades = [
+    bc.UnitType.Ranger,
+    bc.UnitType.Healer,
+    bc.UnitType.Ranger,
+    bc.UnitType.Healer,
+    bc.UnitType.Healer,
+    bc.UnitType.Knight,
+    bc.UnitType.Knight,
+    bc.UnitType.Mage,
+    bc.UnitType.Mage,
+    bc.UnitType.Mage,
+    bc.UnitType.Rocket
+    ]
     for u in upgrades:
         gc.queue_research(u)
 
-def count_units():
-    for t in bc.UnitType:
-        unit_count[t] = 0
-    for u in gc.my_units():
-        unit_count[u.unit_type] += 1
-
+"""
+Unit Spawning
+"""
 def next_unit():
-    #TODO Doesn't work correctly, seems to return ranger every time
     units = []
-    for k in unit_ratio:
-        c = 0
-        if k in unit_count:
-            c = unit_count[k]
-        units.append( (k, c/unit_ratio[k]) )
+    for k in params:
+        c = params[k]["count"]
+        units.append( (k, c/params[k]["ratio"]) )
     return min(units, key = lambda t: t[1])[0]
 
 """
-karbonite
+Map Evaluation
 """
-def detect_karbonite():
+def scan_map():
+    global map_mesh, enemy_mesh, friendly_mesh
     planet_map = gc.starting_map(gc.planet())
+
+    map_mesh = [ [ -1 for y in range(planet_map.height) ] for x in range(planet_map.width) ]
+    enemy_mesh = [ [ 0 for y in range(planet_map.height) ] for x in range(planet_map.width) ]
+    friendly_mesh = [ [ 0 for y in range(planet_map.height) ] for x in range(planet_map.width) ]
 
     for x in range(planet_map.width):
         for y in range(planet_map.height):
             loc = bc.MapLocation(gc.planet(),x,y)
-            if planet_map.on_map(loc):
-                if gc.karbonite_at(loc) > 0:
-                    karbonite_loc.append(index_loc)
 
+            if planet_map.on_map(loc):
+                if planet_map.is_passable_terrain_at(loc):
+                    map_mesh[x][y] = planet_map.initial_karbonite_at(loc)
+
+"""
+Gradients
+"""
+def scan_enemies():
+    for u in enemies:
+        if u.location.is_on_map():
+            loc = u.location.map_location()
+            enemy_mesh[loc.x][loc.y] -= 1
+
+def scan_friendlies():
+    for u in gc.my_units():
+        if u.location.is_on_map():
+            loc = u.location.map_location()
+            friendly_mesh[loc.x][loc.y] += 1
+
+def calculate_gradient():
+    global unit_grad
+    unit_mesh = np.add(enemy_mesh,friendly_mesh)
+    unit_grad = np.gradient(unit_mesh)
+
+"""
+Karbonite
+"""
 def sense_karbonite(u):
     if u.location.is_on_map():
         loc = u.location.map_location()
@@ -88,7 +182,8 @@ def sense_karbonite(u):
         #Awkward for loop to put the closest karbonite at the front of the array
         for x in range(max(0,loc.x-radius),min(gc.starting_map(gc.planet()).width,loc.x+radius)):
             for y in range(max(0,loc.y-radius),min(gc.starting_map(gc.planet()).height,loc.y+radius)):
-                index_loc = bc.MapLocation(gc.planet(),x,y)
+                index_loc = bc.MapLocation(gc.planet(),x,y) # THIS GAVE ME AN ERROR
+                # incorrect type of arg planet: should be Planet, is {}".format(type(planet)) IDK what that means
                 try:
                     if gc.karbonite_at(index_loc) > 0:
                         if index_loc not in karbonite_loc:
@@ -107,11 +202,17 @@ def best_karbonite(u):
     return min(dist, key = lambda t: t[1])[0]
 
 def mars_karbonite():
-    array={}
+    maxk=0
+    location = None
     for x in range(0,gc.starting_map(1).width):
         for y in range(0,gc.starting_map(1).height):
-            index_loc=bc.MapLocation
-    pass
+            index_loc=bc.MapLocation(gc.starting_map(1),x,y)
+            if gc.starting_map(1).on_map(index_loc):
+                if gc.karbonite_at(index_loc)>maxk:
+                    maxk=gc.karbonite_at(index_loc)
+                    location = index_loc
+    return location
+
 
 """
 Enemy Detection
@@ -181,6 +282,19 @@ def create_enemy_mesh():
             except:
                 op_mesh[loc.x][loc.y] = 1
 
+def get_lowest_unit(u):
+    units = gc.sense_nearby_units_by_type(u.location.map_location(),30, bc.UnitType.Ranger)
+    minIndex = 0
+    if len(units)==0:
+        return None
+    for x in range(len(units)):
+        if units[x].health<units[minIndex].health:
+            minIndex=x
+    #print("UNITS:",units[minIndex])
+    return units[minIndex]
+
+
+
 """
 Pathfinding
 """
@@ -225,6 +339,7 @@ def find_path(start, end):
     return False
 
 def group_up(u): # Workers to head toward factories
+    global friendly_mesh
     loc = u.location.map_location()
 
     if len(gc.sense_nearby_units_by_team(u.location.map_location(), int(u.vision_range/2), my_team)) > min( len(gc.my_units()), math.exp(len(gc.my_units())) ) :
@@ -235,7 +350,7 @@ def group_up(u): # Workers to head toward factories
     max_friends = (0, None)
     for x in range(planet_map.width):
         for y in range(planet_map.height):
-            friends = my_mesh[x][y]
+            friends = friendly_mesh[x][y]
             if friends > max_friends[0]:
                 max_friends = (friends, bc.MapLocation(gc.planet(), x, y) )
 
@@ -247,14 +362,16 @@ def group_up(u): # Workers to head toward factories
         spread_out(u, d)
 
 def run_away(u): # Run away from enemy troops toward safety
+    global enemy_mesh
+    global friendly_mesh
     loc = u.location.map_location()
-    enemies = op_mesh[loc.x][loc.y]
-    if enemies < my_mesh[loc.x][loc.y] + 1:
+    enemies = enemy_mesh[loc.x][loc.y]#op mesh???
+    if enemies < friendly_mesh[loc.x][loc.y] + 1:#my mesh???
         return False
     planet_map = gc.starting_map(gc.planet())
     for x in range(planet_map.width):
         for y in range(planet_map.height):
-            friends = my_mesh[x][y] + 1
+            friends = friendly_mesh[x][y] + 1
             if friends > enemies:
                 d = u.location.map_location().direction_to( bc.MapLocation(gc.planet(), x, y) )
                 if gc.can_move(u.id,d):
@@ -314,11 +431,11 @@ def move_toward_dest(u, en): # move toward destination if dest exists
     else:
         kite(u, en)
 
+
 """
 Unit Management
 """
 def worker(u):
-    global blue_count
     if u.location.is_on_map():
         #Replicate worker
         if gc.karbonite() >= 15:
@@ -337,22 +454,26 @@ def worker(u):
                     gc.build(u.id,units.id)
                     return None
 
+        #rocket
+        if buildings[bc.UnitType.Rocket]["count"]<=buildings[bc.UnitType.Rocket]["cap"]:
+            for d in directions:
+                if gc.can_blueprint(u.id, bc.UnitType.Rocket, d):
+                    gc.blueprint(u.id,bc.UnitType.Rocket,d)
+
         #Build factory
-        if gc.karbonite() >= bc.UnitType.Factory.blueprint_cost() and unit_count[bc.UnitType.Factory] >= blue_count:
+        if gc.karbonite() >= bc.UnitType.Factory.blueprint_cost() and buildings[bc.UnitType.Factory]["count"] <= buildings[bc.UnitType.Factory]["cap"]:
             print("CAN BUILD FACTORY")
             closest_en = closest_enemy(u)
             if closest_en:
                 direction = u.location.map_location().direction_to(closest_en.location.map_location()).opposite()
                 if gc.can_blueprint(u.id, bc.UnitType.Factory, direction):
                     gc.blueprint(u.id, bc.UnitType.Factory, direction)
-                    blue_count+=1
                 else:
                     d = direction
                     for a in range( int(len(directions)/2) ):
                         d.rotate_left()
                         if gc.can_blueprint(u.id, bc.UnitType.Factory, d):
                             gc.blueprint(u.id, bc.UnitType.Factory, d)
-                            blue_count+=1
                             break
             else:
                 d = random.choice(directions)
@@ -360,7 +481,6 @@ def worker(u):
                     d.rotate_left()
                     if gc.can_blueprint(u.id, bc.UnitType.Factory, d):
                         gc.blueprint(u.id, bc.UnitType.Factory, d)
-                        blue_count+=1
                         break
             return None
 
@@ -444,55 +564,75 @@ def mage(u):
 
     return None
 def healer(u):
-    pass
+    if u.location.is_on_map():
+        healFirst = get_lowest_unit(u)
+    if healFirst is not None:
+        if gc.can_heal(u.id,healFirst.id):
+            gc.heal(u.id,healFirst.id)
+            return None
+    closest_en = closest_enemy(u)
+    if gc.is_move_ready(u.id):
+        if u.id in unit_dest:
+            move_toward_dest()
+        #Direction of closest enemy
+        d=u.location.map_location().direction_to(closest_en.location.map_location())
+        #Check if enemy is out of attack range
+        if u.location.map_location().distance_squared_to(closest_en.location.map_location()) > 40:
+            if gc.can_move(u.id,d):
+                gc.move_robot(u.id,d)
+        else:
+            d = d.opposite()
+            if gc.can_move(u.id,d):
+                    gc.move_robot(u.id,d)
 def factory(u):
     garrison = u.structure_garrison()
     if len(garrison) > 0:
         closest_en = closest_enemy(u)
         if closest_en:
             direction = u.location.map_location().direction_to(closest_en.location.map_location())
-
-            if gc.can_unload(u.id, direction):
-                gc.unload(u.id, direction)
-            else:
-                for d in directions:
-                    if gc.can_unload(u.id, d):
-                        gc.unload(u.id, d)
+        else:
+            direction = random.choice(directions)
+        if gc.can_unload(u.id, direction):
+            gc.unload(u.id, direction)
+        else:
+            for d in directions:
+                if gc.can_unload(u.id, d):
+                    gc.unload(u.id, d)
             return None
 
     nu = next_unit()
-    if gc.can_produce_robot(u.id, bc.UnitType.Ranger):
-        gc.produce_robot(u.id, bc.UnitType.Ranger)
+    if gc.can_produce_robot(u.id, nu):
+        gc.produce_robot(u.id, nu)
     return None
 def rocket(u):
-#    if gc.can_launch_rocket(u.id,
-    pass
-
-"""
-Experimental
-"""
-def testEarth():
-    for unit in root:
-        detect_enemy(unit)
-        print(detected_Enemy)
+    # if len(u.structure_garrison())<8:
+    #     for f in adjacent_troops:
+    #         if gc.can_load(u.id, f.id):
+    #             gc.load(u.id,f.id)
+    #             return None
+    if gc.can_launch_rocket(u.id, mars_karbonite()):
+        gc.launch_rocket(u.id,mars_karbonite())
+        return None
 
 """
 Planet Control
 """
+def init_setup():
+    manage_upgrades()
+    scan_map()
 def earth():
     # detect_karbonite()
     while True:
         print("EARTH CODE {}, K: {} \n".format(gc.round(), gc.karbonite()))
-        print(len(enemy_loc))
-        verify_enemy()
-        count_units()
-        create_friendly_mesh()
-        create_enemy_mesh()
-        unit_ratio[bc.UnitType.Ranger] += 1
+
+        scan_enemies()
+        scan_friendlies()
+        calculate_gradient()
+
         for u in gc.my_units():
             # print(u.unit_type)
             unit_dict[u.unit_type](u)
-            detect_enemy(u)
+            # detect_enemy(u)
         next_turn()
 def mars():
     # sense_karbonite(u)
@@ -502,15 +642,12 @@ def mars():
 """
 Running
 """
-
-# A GameController is the main type that you talk to the game with.
-# Its constructor will connect to a running game.
 gc = bc.GameController()
+
+# Basic Constants
 my_team = gc.team()
 op_team = get_enemy_team(my_team)
 
-# Basic Constants
-directions = list(bc.Direction)
 unit_dict = {
     bc.UnitType.Worker : worker,
     bc.UnitType.Knight : knight,
@@ -519,17 +656,8 @@ unit_dict = {
     bc.UnitType.Rocket : rocket,
     bc.UnitType.Factory : factory
 }
-unit_dest = {}
-unit_ratio = {
-    bc.UnitType.Worker: 5,
-    bc.UnitType.Ranger: 20,
-    # bc.UnitType.Mage: 10
-}
-    # bc.UnitType.Knight: 10,
-unit_count = {
-    bc.UnitType.Worker: len(gc.my_units())
-}
 
+unit_dest = {}
 
 
 # Communications for same planet
@@ -539,10 +667,7 @@ karbonite_loc = []
 op_mesh = None
 my_mesh = None
 
-blue_count = 0
-
-manage_upgrades()
-
+init_setup()
 if gc.planet() == bc.Planet.Earth:
     earth()
 else:
