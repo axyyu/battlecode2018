@@ -42,25 +42,35 @@ Parameters
 """
 mesh_radius = 3
 unit_limit = 300
+run_threshold = 3
+unit_weight = {
+    bc.UnitType.Worker : 1,
+    bc.UnitType.Knight : 2,
+    bc.UnitType.Ranger : 8,
+    bc.UnitType.Mage : 6,
+    bc.UnitType.Healer : 6,
+    bc.UnitType.Factory : 6,
+    bc.UnitType.Rocket : 4
+}
 params = {
     bc.UnitType.Worker : {
         "ratio" : 0.15,
         "count" : 0
     },
-    bc.UnitType.Knight : {
-        "ratio" : 0.02,
-        "count" : 0
-    },
+    # bc.UnitType.Knight : {
+    #     "ratio" : 0.02,
+    #     "count" : 0
+    # },
     bc.UnitType.Ranger : {
         "ratio" : 0.6,
         "count" : 0
     },
-    bc.UnitType.Mage : {
-        "ratio" : 0.03,
-        "count" : 0
-    },
     bc.UnitType.Healer : {
         "ratio" : 0.2,
+        "count" : 0
+    },
+    bc.UnitType.Mage : {
+        "ratio" : 0.03,
         "count" : 0
     }
 }
@@ -80,8 +90,15 @@ buildings = {
 """
 Data
 """
+root = None
+attack_target = None
+nu = None
+
 earth_mesh = []
 mars_mesh = []
+
+fight_loc = []
+fight_en = []
 
 enemies = []
 enemy_mesh = []
@@ -102,6 +119,16 @@ def get_enemy_team(my_team):
     if my_team == bc.Team.Red:
         return bc.Team.Blue
     return bc.Team.Red
+
+def get_direction(loc):
+    # gradient matrix [0] = xcomp [1] = ycomp [0][x][y]
+    gradx, grady = unit_grad[0][loc.x][loc.y], unit_grad[1][loc.x][loc.y]
+
+    angles = [math.pi/2,math.pi/4,0,-math.pi/4,-math.pi/2,-math.pi*3/4,-math.pi,math.pi*3/4]
+    j = math.atan2(gradx,grady)
+    for k in range(angles):
+        if math.abs(j-angles[k])<=math.pi/8:
+            return directions[k]
 
 """
 Upgrades
@@ -126,12 +153,29 @@ def manage_upgrades():
 """
 Unit Spawning
 """
+def count_unit():
+    global fight_loc
+    fight_loc = []
+    for u in gc.my_units():
+        if u.unit_type in params:
+            params[u.unit_type]["count"] = 0
+        if u.unit_type in buildings:
+            buildings[u.unit_type]["count"] = 0
+    for u in gc.my_units():
+        if u.unit_type in params:
+            params[u.unit_type]["count"] += 1
+        if u.unit_type in buildings:
+            buildings[u.unit_type]["count"] +=1
+        if u.health < u.max_health and u.unit_type != bc.UnitType.Factory and u.unit_type != bc.UnitType.Rocket:
+            fight_loc.append(u.location.map_location())
+
 def next_unit():
+    global nu
     units = []
     for k in params:
         c = params[k]["count"]
         units.append( (k, c/params[k]["ratio"]) )
-    return min(units, key = lambda t: t[1])[0]
+    nu = min(units, key = lambda t: t[1])[0]
 
 """
 Map Evaluation
@@ -156,21 +200,25 @@ def scan_map():
 Gradients
 """
 def scan_enemies():
+    global unit_weight
     for u in enemies:
         if u.location.is_on_map():
             loc = u.location.map_location()
-            enemy_mesh[loc.x][loc.y] -= 1
+            enemy_mesh[loc.x][loc.y] -= unit_weight[u.unit_type]
 
 def scan_friendlies():
+    global unit_weight
     for u in gc.my_units():
         if u.location.is_on_map():
             loc = u.location.map_location()
-            friendly_mesh[loc.x][loc.y] += 1
+            friendly_mesh[loc.x][loc.y] += unit_weight[u.unit_type]
 
 def calculate_gradient():
     global unit_grad
+    planet_map = gc.starting_map(gc.planet())
     unit_mesh = np.add(enemy_mesh,friendly_mesh)
-    unit_grad = np.gradient(unit_mesh)
+    unit_grad = np.gradient(unit_mesh, planet_map.width)
+    print(unit_grad)
 
 """
 Karbonite
@@ -195,11 +243,21 @@ def sense_karbonite(u):
                     pass
 
 def best_karbonite(u):
-    # Distance and value
-    dist = [ (kar, u.location.map_location().distance_squared_to( kar )/gc.starting_map(gc.planet()).initial_karbonite_at( kar )) for kar in karbonite_loc]
-    if len(dist) < 1:
+    loc = u.location.map_location()
+    planet_map = gc.starting_map(gc.planet())
+
+    if gc.karbonite_at(loc):
         return None
-    return min(dist, key = lambda t: t[1])[0]
+    for r in range (1, u.vision_range):
+        kar = 0
+        karloc = None
+        for d in directions:
+            newloc = loc.add_multiple(d, r)
+            if gc.on_map(newloc):
+                if gc.karbonite_at(newloc) > kar:
+                    karloc = newloc
+        if karloc:
+            return karloc
 
 def mars_karbonite():
     maxk=0
@@ -218,392 +276,337 @@ def mars_karbonite():
 Enemy Detection
 """
 def get_enemy_team(my_team):
-    #Red is 0 Blue is 1
-    #print(my_team)
     if my_team == bc.Team.Red:
         return bc.Team.Blue
     return bc.Team.Red
 
 def verify_enemy():
-    # for en in enemy_loc:
-    #     if gc.can_sense_location(en.location.map_location()) and not gc.can_sense_unit(en.id):
-    #         enemy_loc.remove(en)
-    for en in enemy_loc:
+    for en in enemies:
         try:
             if not gc.can_sense_unit(en.id):
-                enemy_loc.remove(en)
+                enemies.remove(en)
         except Exception as e:
             if str(e) != "b'The location is outside your vision range.'":
-                enemy_loc.remove(en)
+                enemies.remove(en)
 
-def detect_enemy(u):
-    if u.location.is_on_map():
-        enemies = gc.sense_nearby_units_by_team(u.location.map_location(), u.vision_range ,op_team)
-        for en in enemies:
-            if en not in enemy_loc:
-                enemy_loc.append(en)
-
-def best_enemy(u):
-    #TODO determine target based on DPS, importance, etc
-    dist = [ (en, u.location.map_location().distance_squared_to( en.location.map_location() )) for en in enemy_loc]
-    if len(dist)>0:
-        return min(dist, key = lambda t: t[1])[0]
-    else:
-        return None
+def add_enemies(nearby_en):
+    for en in nearby_en:
+        if en not in enemies:
+            enemies.append(en)
 
 def closest_enemy(u):
-    dist = [ (en, u.location.map_location().distance_squared_to( en.location.map_location() )) for en in enemy_loc]
+    dist = [ (en, u.location.map_location().distance_squared_to( en.location.map_location() )) for en in enemies]
     if len(dist)>0:
         return min(dist, key = lambda t: t[1])[0]
     else:
         return None
 
-"""
-Friendly Detection
-"""
-def create_friendly_mesh():
-    global my_mesh
-    planet_map = gc.starting_map(gc.planet())
-    my_mesh = [ [0 for y in range(planet_map.height)] for x in range(planet_map.width) ]
-    for u in gc.my_units():
-        if u.location.is_on_map():
-            loc = u.location.map_location()
-            my_mesh[loc.x][loc.y] = len(gc.sense_nearby_units_by_team(loc, mesh_radius, my_team))
-
-def create_enemy_mesh():
-    global op_mesh
-    planet_map = gc.starting_map(gc.planet())
-    op_mesh = [ [0 for y in range(planet_map.height)] for x in range(planet_map.width) ]
-    for u in enemy_loc:
-        if u.location.is_on_map():
-            loc = u.location.map_location()
-            try:
-                op_mesh[loc.x][loc.y] = len(gc.sense_nearby_units_by_team(loc, mesh_radius, op_team))
-            except:
-                op_mesh[loc.x][loc.y] = 1
-
-def get_lowest_unit(u):
-    units = gc.sense_nearby_units_by_type(u.location.map_location(),30, bc.UnitType.Ranger)
-    minIndex = 0
-    if len(units)==0:
-        return None
-    for x in range(len(units)):
-        if units[x].health<units[minIndex].health:
-            minIndex=x
-    #print("UNITS:",units[minIndex])
-    return units[minIndex]
-
-
+def worst_enemy(u, nearby_en):
+    for n in fight_en:
+        if n in nearby_en:
+            return n
+    en = [(n, unit_weight[n.unit_type]) for n in nearby_en]
+    return max(en, key = lambda t: t[1])[0]
 
 """
 Pathfinding
 """
-def find_path(start, end):
-    my_map = gc.starting_map(gc.planet())
-    fringe = [(start, None)]
-
-    for i in range(500): # SET MAX ITERATIONS TO PREVENT LENGTHY SEARCHING
-        loc, path = fringe.pop(0)
-
-        if not path:
-            path = []
-
-        direction = loc.direction_to(end)
-        if direction == bc.Direction.Center:
-            print("\n CREATED PATH \n")
-            return path
-
-        new_path = path[:].append(direction)
-        new_loc = loc.add(direction)
-
-        if my_map.on_map(new_loc) and my_map.is_passable_terrain_at(new_loc):
-            fringe.append( (new_loc, new_path) )
+def group_up(u, nearby_fr): # Workers to head toward factories
+    if gc.is_move_ready(u.id):
+        loc = u.location.map_location()
+        if len([e for e in nearby_fr if e.team == my_team]) < min(3, gc.round()):
+            direction = u.location.map_location().direction_to( root.location.map_location() )
+            spread_out(u, direction)
+            return False
         else:
-            left = right = direction
-            for a in range( int(len(directions)/2) ):
-                left = left.rotate_left()
-                right = right.rotate_right()
-
-                new_path = path[:].append(left)
-                new_loc = loc.add(left)
-
-                if my_map.on_map(new_loc) and my_map.is_passable_terrain_at(new_loc):
-                    fringe.append( (new_loc, new_path) )
-
-                new_path = path[:].append(right)
-                new_loc = loc.add(right)
-
-                if my_map.on_map(new_loc) and my_map.is_passable_terrain_at(new_loc):
-                    fringe.append( (new_loc, new_path) )
-
+            return True
     return False
 
-def group_up(u): # Workers to head toward factories
-    global friendly_mesh
-    loc = u.location.map_location()
+def run_away(u, nearby_en): # Run away from enemy troops toward safety
+    if gc.is_move_ready(u.id):
+        loc = u.location.map_location()
+        if len(nearby_en) > 1:
+            en = worst_enemy(u, nearby_en)
+            if en:
+                direction = u.location.map_location().direction_to( en.location.map_location() ).opposite()
+                spread_out(u, direction)
+                return True
+            else:
+                return False
+    return False
 
-    if len(gc.sense_nearby_units_by_team(u.location.map_location(), int(u.vision_range/2), my_team)) > min( len(gc.my_units()), math.exp(len(gc.my_units())) ) :
-        return True
+def spread_out(u, d): # try directions in an arc
+    if gc.is_move_ready(u.id):
+        left = right = d
+        for a in range( int(len(directions)/2) ):
+            if gc.can_move(u.id, left):
+                gc.move_robot(u.id, left)
+                return
+            if gc.can_move(u.id, right):
+                gc.move_robot(u.id, right)
+                return
+            left = left.rotate_left()
+            right = right.rotate_right()
 
-    planet_map = gc.starting_map(gc.planet())
+"""
+Worker Code
+"""
+def blueprint_out(u, d, bp):
+    left = right = d
+    for a in range( int(len(directions)/2) ):
+        if gc.can_blueprint(u.id, bp, left):
+            gc.blueprint(u.id, bp, left)
+            return
+        if gc.can_blueprint(u.id, bp, right):
+            gc.blueprint(u.id, bp, right)
+            return
+        left = left.rotate_left()
+        right = right.rotate_right()
 
-    max_friends = (0, None)
-    for x in range(planet_map.width):
-        for y in range(planet_map.height):
-            friends = friendly_mesh[x][y]
-            if friends > max_friends[0]:
-                max_friends = (friends, bc.MapLocation(gc.planet(), x, y) )
+def replicate_worker(u):
+    if gc.karbonite() >= 15:
+        for d in (directions):
+            if gc.can_replicate(u.id, d):
+                gc.replicate(u.id,d)
+                return
 
-    d = u.location.map_location().direction_to( max_friends[1] )
-    if gc.can_move(u.id,d):
-        gc.move_robot(u.id,d)
-        return False
-    else:
-        spread_out(u, d)
+def build_structures(u):
+    nearby = gc.sense_nearby_units(u.location.map_location(), 2)
+    for units in nearby:
+        if units.unit_type == bc.UnitType.Factory or units.unit_type == bc.UnitType.Rocket:
+            if gc.can_build(u.id, units.id):
+                gc.build(u.id,units.id)
+                return
 
-def run_away(u): # Run away from enemy troops toward safety
-    global enemy_mesh
-    global friendly_mesh
-    loc = u.location.map_location()
-    enemies = enemy_mesh[loc.x][loc.y]#op mesh???
-    if enemies < friendly_mesh[loc.x][loc.y] + 1:#my mesh???
-        return False
-    planet_map = gc.starting_map(gc.planet())
-    for x in range(planet_map.width):
-        for y in range(planet_map.height):
-            friends = friendly_mesh[x][y] + 1
-            if friends > enemies:
-                d = u.location.map_location().direction_to( bc.MapLocation(gc.planet(), x, y) )
-                if gc.can_move(u.id,d):
-                    gc.move_robot(u.id,d)
-                    return True
-                else:
-                    spread_out(u, d)
-                    return True
-    return True
+def blueprint_factory(u):
+    if gc.karbonite() >= bc.UnitType.Factory.blueprint_cost():
+        loc = u.location.map_location()
 
-def move_toward_enemy(u, en): # move toward known enemy location
-    if u.id in unit_dest:
-        unit_dest.pop(u.id, None)
-    d = u.location.map_location().direction_to(en.location.map_location())
-    if gc.can_move(u.id,d):
-        gc.move_robot(u.id,d)
-    else:
-        spread_out(u, d)
+        d = loc.direction_to(root.location.map_location())
+        blueprint_out(u, d, bc.UnitType.Factory)
 
-def kite(u, en):
-    d = u.location.map_location().distance_squared_to(en.location.map_location())
-    ran = en.vision_range
+def blueprint_rocket(u):
+    if gc.karbonite() >= bc.UnitType.Rocket.blueprint_cost():
+        loc = u.location.map_location()
+
+        d = loc.direction_to(root.location.map_location()) #TODO change to nearby troops
+        blueprint_out(u, d, bc.UnitType.Factory)
+
+def mine_karbonite(u):
+    bk = best_karbonite(u)
+    if bk:
+        d = u.location.map_location().direction_to(bk)
+
+        if gc.can_harvest(u.id, d):
+            gc.harvest(u.id, d)
+
+        if gc.is_move_ready(u.id):
+            spread_out(u, d)
+
+def worker(u):
+    if u.location.is_on_map():
+        nearby = gc.sense_nearby_units(u.location.map_location(), u.vision_range)
+        nearby_en = [n for n in nearby if n.team == op_team]
+        nearby_fr = [n for n in nearby if n.team == my_team]
+
+        add_enemies(nearby_en)
+
+        print("\t{}".format(nu))
+        if nu == bc.UnitType.Worker:
+            replicate_worker(u)
+
+        if not run_away(u, nearby_en):
+
+            if group_up(u, nearby_fr):
+                #Structures
+                build_structures(u)
+
+                if buildings[bc.UnitType.Factory]["count"] <= buildings[bc.UnitType.Factory]["cap"]:
+                    blueprint_factory(u);
+
+                if buildings[bc.UnitType.Rocket]["count"] <= buildings[bc.UnitType.Rocket]["cap"]:
+                    blueprint_rocket(u)
+
+                #Mining
+                mine_karbonite(u)
+
+"""
+Knight
+"""
+
+def knight(u):
+    """ we actually dont need knights rn """
+    # if u.location.is_on_map():
+    #     closest_en = closest_enemy(u)
+    #     if closest_en:
+    #         if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
+    #             if gc.is_attack_ready(u.id):
+    #                 if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
+    #                     gc.attack(u.id,closest_en.id)
+    #
+    #     if gc.is_move_ready(u.id):
+    #         if not run_away(u):
+    #             if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
+    #                 move_toward_enemy(u, closest_en)
+    #             else:
+    #                 path = find_path( u.location.map_location(), closest_en.location.map_location() )
+    #                 if path:
+    #                     unit_dest[u.id] = path
+    #                 move_toward_dest(u, closest_en)
+
+"""
+Rangers and Mages
+"""
+def guard(u, nearby_fr):
+    if gc.is_move_ready(u.id):
+        if len(nearby_fr) < 0:
+            d = u.location.map_location().direction_to( root.location.map_location() )
+            spread_out(u, d)
+            return
+
+        dist = [ (fr, u.location.map_location().distance_squared_to( fr.location.map_location() )) for fr in nearby_fr]
+        fr = min(dist, key = lambda t: t[1])
+        print("\t",fr[1])
+
+        if fr[1] <= 3:
+            d = u.location.map_location().direction_to( fr[0].location.map_location() ).opposite()
+            spread_out(u, d)
+            return
+
+        elif fr[1] > 8:
+            d = u.location.map_location().direction_to( fr[0].location.map_location() )
+            spread_out(u, d)
+            return
+
+def battle(u, en):
+    dist = u.location.map_location().distance_squared_to( en.location.map_location() )
+    ran  = 0
+
     try:
         ran = en.attack_range()
     except:
         pass
-    if d > ran or u.attack_range() < d:
-        move_toward_enemy(u, en)
-    else:
-        print("KITING")
-        di = u.location.map_location().direction_to(en.location.map_location()).opposite()
-        if gc.can_move(u.id,di):
-            gc.move_robot(u.id,di)
-        else:
-            spread_out(u, di)
 
-def spread_out(u, d): # walk away from friendly troops if they are right next to you
-    left = right = d
-    for a in range( int(len(directions)/2) ):
-        left = left.rotate_left()
-        right = right.rotate_right()
-        if gc.is_move_ready(u.id) and gc.can_move(u.id, left):
-            gc.move_robot(u.id, left)
-            return
-        if gc.is_move_ready(u.id) and gc.can_move(u.id, right):
-            gc.move_robot(u.id, right)
-            return
+    if dist > u.attack_range():
+        if gc.is_move_ready(u.id):
+            d = u.location.map_location().direction_to( en.location.map_location() )
+            spread_out(u, d)
 
-def move_toward_dest(u, en): # move toward destination if dest exists
-    if u.id in unit_dest:
-        d = unit_dest[u.id].pop()
-        if gc.can_move(u.id,d):
-            gc.move_robot(u.id,d)
-        else:
-            unit_dest.pop(u.id, None)
+    elif u.attack_range() > ran:
+        if gc.is_attack_ready(u.id) and gc.can_attack(u.id, en.id):
+            gc.attack(u.id, en.id)
+            if en not in fight_en:
+                fight_en.append(en)
+
+        if gc.is_move_ready(u.id):
+            d = u.location.map_location().direction_to( en.location.map_location() )
             spread_out(u, d)
     else:
-        kite(u, en)
-
-
-"""
-Unit Management
-"""
-def worker(u):
-    if u.location.is_on_map():
-        #Replicate worker
-        if gc.karbonite() >= 15:
-            nu = next_unit()
-            if nu == bc.UnitType.Worker:
-                for d in (directions):
-                    if (gc.can_replicate(u.id,d)):
-                        gc.replicate(u.id,d)
-                        return None
-
-        #Build factory code
-        nearby = gc.sense_nearby_units(u.location.map_location(), 3)
-        for units in nearby:
-            if units.unit_type == bc.UnitType.Factory:
-                if gc.can_build(u.id, units.id):
-                    gc.build(u.id,units.id)
-                    return None
-
-        #rocket
-        if buildings[bc.UnitType.Rocket]["count"]<=buildings[bc.UnitType.Rocket]["cap"]:
-            for d in directions:
-                if gc.can_blueprint(u.id, bc.UnitType.Rocket, d):
-                    gc.blueprint(u.id,bc.UnitType.Rocket,d)
-
-        #Build factory
-        if gc.karbonite() >= bc.UnitType.Factory.blueprint_cost() and buildings[bc.UnitType.Factory]["count"] <= buildings[bc.UnitType.Factory]["cap"]:
-            print("CAN BUILD FACTORY")
-            closest_en = closest_enemy(u)
-            if closest_en:
-                direction = u.location.map_location().direction_to(closest_en.location.map_location()).opposite()
-                if gc.can_blueprint(u.id, bc.UnitType.Factory, direction):
-                    gc.blueprint(u.id, bc.UnitType.Factory, direction)
-                else:
-                    d = direction
-                    for a in range( int(len(directions)/2) ):
-                        d.rotate_left()
-                        if gc.can_blueprint(u.id, bc.UnitType.Factory, d):
-                            gc.blueprint(u.id, bc.UnitType.Factory, d)
-                            break
-            else:
-                d = random.choice(directions)
-                for a in range( int(len(directions)/2) ):
-                    d.rotate_left()
-                    if gc.can_blueprint(u.id, bc.UnitType.Factory, d):
-                        gc.blueprint(u.id, bc.UnitType.Factory, d)
-                        break
-            return None
-
-        #Mining code
-        sense_karbonite(u)
-        bk = best_karbonite(u)
-        if bk:
-            direction = u.location.map_location().direction_to(bk)
-            if gc.can_harvest(u.id,direction):
-                gc.harvest(u.id,direction)
-                return None
-
-
-        # Movement code
-        if gc.is_move_ready(u.id):
-            if not run_away(u):
-                if group_up(u):
-                    if gc.can_move(u.id, u.location.map_location().direction_to(bk)):
-                        gc.move_robot(u.id, u.location.map_location().direction_to(bk))
-                        return None
-
-def knight(u):
-    if u.location.is_on_map():
-        closest_en = closest_enemy(u)
-        if closest_en:
-            if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
-                if gc.is_attack_ready(u.id):
-                    if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
-                        gc.attack(u.id,closest_en.id)
+        if gc.is_attack_ready(u.id) and gc.can_attack(u.id, en.id):
+            gc.attack(u.id, en.id)
+            if en not in fight_en:
+                fight_en.append(en)
 
         if gc.is_move_ready(u.id):
-            if not run_away(u):
-                if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
-                    move_toward_enemy(u, closest_en)
-                else:
-                    path = find_path( u.location.map_location(), closest_en.location.map_location() )
-                    if path:
-                        unit_dest[u.id] = path
-                    move_toward_dest(u, closest_en)
+            d = u.location.map_location().direction_to( en.location.map_location() ).opposite()
+            spread_out(u, d)
 
-    return None
+def pursue(u):
+    if gc.is_move_ready(u.id):
+        dist = [ (loc, u.location.map_location().distance_squared_to( loc )) for loc in fight_loc]
+        loc = min(dist, key = lambda t: t[1])
+
+        d = u.location.map_location().direction_to( loc[0] ).opposite()
+        spread_out(u, d)
+
 def ranger(u):
     if u.location.is_on_map():
-        closest_en = closest_enemy(u)
-        if closest_en:
-            if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
-                if gc.is_attack_ready(u.id):
-                    if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
-                        gc.attack(u.id,closest_en.id)
+        nearby = gc.sense_nearby_units(u.location.map_location(), u.attack_range())
+        nearby_en = [n for n in nearby if n.team == op_team]
+        nearby_fr = [n for n in nearby if n.team == my_team]
 
-        if gc.is_move_ready(u.id):
-            if not run_away(u):
-                if closest_en:
-                    if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
-                        kite(u, closest_en)
-                        return None
-                path = find_path( u.location.map_location(), closest_en.location.map_location() )
-                if path:
-                    unit_dest[u.id] = path
-                move_toward_dest(u, closest_en)
+        add_enemies(nearby_en)
 
-    return None
+        if len(nearby_en) > 0:
+            bad_guy = worst_enemy(u, nearby_en)
+            battle(u, bad_guy)
+        elif len(fight_loc) > 0:
+            pursue(u)
+        else:
+            guard(u, nearby_fr)
+
 def mage(u):
     if u.location.is_on_map():
-        closest_en = closest_enemy(u)
-        if closest_en:
-            if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
-                if gc.is_attack_ready(u.id):
-                    if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
-                        gc.attack(u.id,closest_en.id)
+        nearby = gc.sense_nearby_units(u.location.map_location(), u.attack_range())
+        nearby_en = [n for n in nearby if n.team == op_team]
+        nearby_fr = [n for n in nearby if n.team == my_team]
 
-        if gc.is_move_ready(u.id):
-            if not run_away(u):
-                if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
-                    move_toward_enemy(u, closest_en)
-                else:
-                    path = find_path( u.location.map_location(), closest_en.location.map_location() )
-                    if path:
-                        unit_dest[u.id] = path
-                    move_toward_dest(u, closest_en)
+        add_enemies(nearby_en)
 
-    return None
+        if len(nearby_en) > 0:
+            bad_guy = worst_enemy(u, nearby_en)
+            battle(u, bad_guy)
+        elif len(fight_loc) > 0:
+            pursue(u)
+        else:
+            guard(u, nearby_fr)
+
+"""
+Healers
+"""
+def go_to_heal(u, nearby_fight):
+    if gc.is_move_ready(u.id):
+        d = u.location.map_location().direction_to( nearby_fight )
+        spread_out(u, d)
+
+def heal_lowest_unit(u, nearby_fr):
+    if gc.is_heal_ready(u.id):
+        health = [ (fr, fr.max_health - fr.health) for fr in nearby_fr]
+        fr = max(health, key = lambda t: t[1])
+
+        if gc.can_heal(u.id, fr[0].id):
+            gc.heal(u.id, fr[0].id)
+
+def nearest_fight(u):
+    dist = [ (loc, u.location.map_location().distance_squared_to( loc )) for loc in fight_loc]
+    loc = min(dist, key = lambda t: t[1])
+    return loc[0]
+
 def healer(u):
     if u.location.is_on_map():
-        healFirst = get_lowest_unit(u)
-    if healFirst is not None:
-        if gc.can_heal(u.id,healFirst.id):
-            gc.heal(u.id,healFirst.id)
-            return None
-    closest_en = closest_enemy(u)
-    if gc.is_move_ready(u.id):
-        if u.id in unit_dest:
-            move_toward_dest()
-        #Direction of closest enemy
-        d=u.location.map_location().direction_to(closest_en.location.map_location())
-        #Check if enemy is out of attack range
-        if u.location.map_location().distance_squared_to(closest_en.location.map_location()) > 40:
-            if gc.can_move(u.id,d):
-                gc.move_robot(u.id,d)
+        nearby = gc.sense_nearby_units(u.location.map_location(), u.vision_range)
+        nearby_en = [n for n in nearby if n.team == op_team]
+        nearby_fr = [n for n in nearby if n.team == my_team]
+
+        if len(fight_loc) > 0:
+            nearby_fight = nearest_fight(u)
+            if u.location.map_location().distance_squared_to( nearby_fight ) < u.attack_range():
+                if len(nearby_fr) > 0:
+                    heal_lowest_unit(u, nearby_fr)
+            go_to_heal(u, nearby_fight)
         else:
-            d = d.opposite()
-            if gc.can_move(u.id,d):
-                    gc.move_robot(u.id,d)
+            guard(u, nearby_fr)
+
+"""
+Factory
+"""
+def deploy_troop(u):
+    for d in directions:
+        if gc.can_unload(u.id, d):
+            gc.unload(u.id, d)
+
 def factory(u):
     garrison = u.structure_garrison()
     if len(garrison) > 0:
-        closest_en = closest_enemy(u)
-        if closest_en:
-            direction = u.location.map_location().direction_to(closest_en.location.map_location())
-        else:
-            direction = random.choice(directions)
-        if gc.can_unload(u.id, direction):
-            gc.unload(u.id, direction)
-        else:
-            for d in directions:
-                if gc.can_unload(u.id, d):
-                    gc.unload(u.id, d)
-            return None
+        deploy_troop(u)
 
-    nu = next_unit()
     if gc.can_produce_robot(u.id, nu):
         gc.produce_robot(u.id, nu)
-    return None
+
+"""
+Rocket
+"""
+
 def rocket(u):
     # if len(u.structure_garrison())<8:
     #     for f in adjacent_troops:
@@ -621,13 +624,19 @@ def init_setup():
     manage_upgrades()
     scan_map()
 def earth():
-    # detect_karbonite()
+    global root
+    root = random.choice(gc.my_units())
     while True:
-        print("EARTH CODE {}, K: {} \n".format(gc.round(), gc.karbonite()))
+        print("EARTH {}, K: {} \n".format(gc.round(), gc.karbonite()))
 
+        verify_enemy()
         scan_enemies()
         scan_friendlies()
-        calculate_gradient()
+
+        # calculate_gradient()
+
+        count_unit()
+        next_unit()
 
         for u in gc.my_units():
             # print(u.unit_type)
@@ -644,7 +653,6 @@ Running
 """
 gc = bc.GameController()
 
-# Basic Constants
 my_team = gc.team()
 op_team = get_enemy_team(my_team)
 
@@ -653,19 +661,10 @@ unit_dict = {
     bc.UnitType.Knight : knight,
     bc.UnitType.Ranger : ranger,
     bc.UnitType.Mage : mage,
+    bc.UnitType.Healer : healer,
     bc.UnitType.Rocket : rocket,
     bc.UnitType.Factory : factory
 }
-
-unit_dest = {}
-
-
-# Communications for same planet
-enemy_loc = [u for u in gc.starting_map(gc.planet()).initial_units if u.team == op_team]
-enemy_targets = []
-karbonite_loc = []
-op_mesh = None
-my_mesh = None
 
 init_setup()
 if gc.planet() == bc.Planet.Earth:
