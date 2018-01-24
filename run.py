@@ -253,9 +253,11 @@ def best_karbonite(u):
         karloc = None
         for d in directions:
             newloc = loc.add_multiple(d, r)
-            if gc.on_map(newloc):
+            try:
                 if gc.karbonite_at(newloc) > kar:
                     karloc = newloc
+            except:
+                pass
         if karloc:
             return karloc
 
