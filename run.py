@@ -44,6 +44,7 @@ Troops:
 Parameters
 """
 mesh_radius = 3
+first_factory = False
 unit_limit = 100
 run_threshold = 3
 unit_weight = {
@@ -61,10 +62,10 @@ params = {
         "count" : 0,
         "cap" : 6
     },
-    # bc.UnitType.Knight : {
-    #     "ratio" : 0.02,
-    #     "count" : 0
-    # },
+    bc.UnitType.Knight : {
+        "ratio" : 0.02,
+        "count" : 0
+    },
     bc.UnitType.Ranger : {
         "ratio" : 0.6,
         "count" : 0
@@ -137,26 +138,6 @@ def get_direction(loc):
     for k in range(angles):
         if math.abs(j-angles[k])<=math.pi/8:
             return directions[k]
-
-"""
-Upgrades
-"""
-def manage_upgrades():
-    upgrades = [
-    bc.UnitType.Rocket, #100
-    bc.UnitType.Ranger, #25
-    bc.UnitType.Healer, #25
-    bc.UnitType.Ranger, #100
-    bc.UnitType.Healer, #100
-    bc.UnitType.Healer, #100
-    bc.UnitType.Mage, #25
-    bc.UnitType.Mage, #75
-    bc.UnitType.Mage, #100
-    bc.UnitType.Knight, #25
-    bc.UnitType.Knight, #75
-    ]
-    for u in upgrades:
-        gc.queue_research(u)
 
 """
 Unit Spawning
@@ -308,9 +289,9 @@ def closest_enemy(u, nearby_en):
         return None
 
 def worst_enemy(u, nearby_at):
-    # for n in nearby_at:
-    #     if n in fight_en:
-    #         return n
+    for n in nearby_at:
+        if n in fight_en:
+            return n
     en = []
     for n in nearby_at:
         if n.location.is_on_map():
@@ -325,23 +306,21 @@ def worst_enemy(u, nearby_at):
 Pathfinding
 """
 def group_up(u, nearby_fr): # Workers to head toward factories
+    if len(nearby_fr) >= min(4, len(gc.my_units())):
+        return True
+
     if gc.is_move_ready(u.id):
-        loc = u.location.map_location()
-        if len(nearby_fr) <= min(4, len(gc.my_units())):
-            direction = u.location.map_location().direction_to( root.location.map_location() )
-            if direction == bc.Direction.Center:
-                return True
-            spread_out(u, direction)
-            return False
-        else:
+        direction = u.location.map_location().direction_to( root.location.map_location() )
+        if direction == bc.Direction.Center:
             return True
+        spread_out(u, direction)
     return False
 
 def run_away(u, nearby_en): # Run away from enemy troops toward safety
     if gc.is_move_ready(u.id):
         loc = u.location.map_location()
         if len(nearby_en) > 0:
-            en = worst_enemy(u, nearby_en)
+            en = closest_enemy(u, nearby_en)
 
             if en and en.unit_type != bc.UnitType.Worker and en.unit_type != bc.UnitType.Factory and en.unit_type != bc.UnitType.Rocket:
                 r = en.attack_range()
@@ -388,13 +367,14 @@ def blueprint_out(u, d, bp):
         right = right.rotate_right()
 
 def replicate_worker(u):
-    if gc.karbonite() >= 15:
+    if gc.karbonite() >= 60:
         for d in (directions):
             if gc.can_replicate(u.id, d):
                 gc.replicate(u.id,d)
                 return
 
 def build_structures(u, nearby_fr):
+    nearby_fr = sorted(nearby_fr, key = lambda x: u.location.map_location().distance_squared_to(x.location.map_location()) )
     for units in nearby_fr:
         if units.unit_type == bc.UnitType.Factory or units.unit_type == bc.UnitType.Rocket:
             if units.max_health != units.health:
@@ -413,13 +393,14 @@ def build_structures(u, nearby_fr):
     return False
 
 def blueprint_factory(u):
-    if gc.round() < 10 and u != root:
+    if gc.round() < 50 and u != root:
         return
     if gc.karbonite() >= bc.UnitType.Factory.blueprint_cost():
         loc = u.location.map_location()
 
         d = loc.direction_to(root.location.map_location())
         blueprint_out(u, d, bc.UnitType.Factory)
+        first_factory = True
 
 def blueprint_rocket(u):
     if gc.karbonite() >= bc.UnitType.Rocket.blueprint_cost():
@@ -458,51 +439,26 @@ def worker(u):
 
                 if gc.planet() == bc.Planet.Earth:
 
-                    # if not board_rocket(u, nearby_rocket):
-                        if group_up(u, nearby_fr):
+                    if group_up(u, nearby_fr) or len(fight_loc) < 1:
 
-                            if (gc.round() > 100 and len(fight_loc) > 0) or gc.round() > 450:
-                                if buildings[bc.UnitType.Rocket]["count"] <= buildings[bc.UnitType.Rocket]["cap"] or gc.karbonite() > 200 or gc.round() > 700:
-                                    blueprint_rocket(u)
+                        if (gc.round() > 100 and len(fight_loc) > 0) or gc.round() > 450:
+                            if buildings[bc.UnitType.Rocket]["count"] <= buildings[bc.UnitType.Rocket]["cap"] or gc.karbonite() > 300 or gc.round() > 700:
+                                blueprint_rocket(u)
 
-                            if buildings[bc.UnitType.Factory]["count"] <= buildings[bc.UnitType.Factory]["cap"]:
-                                blueprint_factory(u);
+                        if buildings[bc.UnitType.Factory]["count"] <= buildings[bc.UnitType.Factory]["cap"]:
+                            blueprint_factory(u);
 
-                            #Mining
-                            if not mine_karbonite(u):
-                                if u != root:
-                                    guard(u, nearby_fr)
+                        #Mining
+                        if not mine_karbonite(u):
+                            if u != root:
+                                guard(u, nearby_fr)
 
                 else:
                     if not mine_karbonite(u):
                         wander(u)
 
 """
-Knight
-"""
-
-def knight(u):
-    """ we actually dont need knights rn """
-    # if u.location.is_on_map():
-    #     closest_en = closest_enemy(u)
-    #     if closest_en:
-    #         if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
-    #             if gc.is_attack_ready(u.id):
-    #                 if gc.can_sense_unit(closest_en.id) and gc.can_attack(u.id, closest_en.id):
-    #                     gc.attack(u.id,closest_en.id)
-    #
-    #     if gc.is_move_ready(u.id):
-    #         if not run_away(u):
-    #             if u.location.map_location().distance_squared_to( closest_en.location.map_location() ) <= u.vision_range:
-    #                 move_toward_enemy(u, closest_en)
-    #             else:
-    #                 path = find_path( u.location.map_location(), closest_en.location.map_location() )
-    #                 if path:
-    #                     unit_dest[u.id] = path
-    #                 move_toward_dest(u, closest_en)
-
-"""
-Rangers and Mages
+Troops
 """
 
 # BUG Sometimes the rangers don't attack a target right in front of their faces, not sure why?
@@ -539,7 +495,7 @@ def battle(u, en):
     except:
         pass
 
-    if dist > u.attack_range():
+    if dist >= u.attack_range():
         if gc.is_move_ready(u.id):
             d = u.location.map_location().direction_to( en.location.map_location() )
             spread_out(u, d)
@@ -549,7 +505,7 @@ def battle(u, en):
             if en not in fight_en:
                 fight_en.append(en)
 
-    elif dist > ran+1:
+    elif u.attack_range() > ran and dist > ran+1:
         if gc.is_attack_ready(u.id) and gc.can_attack(u.id, en.id):
             gc.attack(u.id, en.id)
             if en not in fight_en:
@@ -596,6 +552,41 @@ def run_toward_rocket(u):
         spread_out(u, d)
     else:
         return None
+
+def knight(u):
+    if u.location.is_on_map():
+        nearby_en = gc.sense_nearby_units_by_team(u.location.map_location(), u.vision_range, op_team)
+        nearby_at = gc.sense_nearby_units_by_team(u.location.map_location(), u.attack_range(), op_team)
+        nearby_fr = gc.sense_nearby_units_by_team(u.location.map_location(), u.vision_range, my_team)
+        nearby_rocket = gc.sense_nearby_units_by_type(u.location.map_location(), 2, bc.UnitType.Rocket)
+
+        if gc.planet() == bc.Planet.Earth:
+            if gc.round() > 600:
+                if not board_rocket(u, nearby_rocket):
+                    run_toward_rocket(u)
+
+            if len(nearby_at) > 0:
+                bad_guy = worst_enemy(u, nearby_at)
+                battle(u, bad_guy)
+            elif len(nearby_en) > 0:
+                bad_guy = closest_enemy(u, nearby_en)
+                chase(u, bad_guy)
+            elif not board_rocket(u, nearby_rocket):
+                if len(fight_loc) > 0:
+                    pursue(u)
+                else:
+                    guard(u, nearby_fr)
+        else:
+            if len(nearby_at) > 0:
+                bad_guy = worst_enemy(u, nearby_at)
+                battle(u, bad_guy)
+            elif len(nearby_en) > 0:
+                bad_guy = closest_enemy(u, nearby_en)
+                chase(u, bad_guy)
+            elif len(fight_loc) > 0:
+                pursue(u)
+            else:
+                guard(u, nearby_fr)
 
 def ranger(u):
     if u.location.is_on_map():
@@ -822,21 +813,62 @@ def determine_root():
         return None
     return root
 
+def tweak_parameters(planet_map):
+    if planet_map.width < 30:
+        params[bc.UnitType.Knight]["ratio"] = 0.5
+
+def manage_upgrades(planet_map):
+    upgrades = []
+    if planet_map.width < 30:
+        upgrades = [
+        bc.UnitType.Knight, #25
+        bc.UnitType.Knight, #75
+        bc.UnitType.Healer, #25
+        bc.UnitType.Ranger, #25
+        bc.UnitType.Mage, #25
+        bc.UnitType.Rocket, #100
+        bc.UnitType.Mage, #75
+        bc.UnitType.Healer, #100
+        bc.UnitType.Ranger, #100
+        bc.UnitType.Healer, #100
+        bc.UnitType.Mage, #100
+        ]
+    else:
+        upgrades = [
+        bc.UnitType.Rocket, #100
+        bc.UnitType.Ranger, #25
+        bc.UnitType.Healer, #25
+        bc.UnitType.Knight, #25
+        bc.UnitType.Mage, #25
+        bc.UnitType.Ranger, #100
+        bc.UnitType.Healer, #100
+        bc.UnitType.Healer, #100
+        bc.UnitType.Knight, #75
+        bc.UnitType.Mage, #75
+        bc.UnitType.Mage, #100
+        ]
+    for u in upgrades:
+        gc.queue_research(u)
+
 def earth():
     global root
 
-    manage_upgrades()
+    earth_map = gc.starting_map(bc.Planet.Earth)
+    manage_upgrades(earth_map)
     obtain_landing_locations()
+    tweak_parameters(earth_map)
 
     while True:
         root = determine_root()
-        verify_enemy()
+
+        # verify_enemy()
 
         count_unit()
         next_unit()
 
         for u in gc.my_units():
             # print(u.unit_type)
+            verify_enemy()
             unit_dict[u.unit_type](u)
             # detect_enemy(u)
         next_turn()
@@ -845,12 +877,13 @@ def mars():
     while True:
         root = determine_root()
 
-        verify_enemy()
+        # verify_enemy()
 
         count_unit()
         next_unit()
 
         for u in gc.my_units():
+            verify_enemy()
             unit_dict[u.unit_type](u)
         next_turn()
 
