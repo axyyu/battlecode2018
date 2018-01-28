@@ -43,8 +43,8 @@ Troops:
 """
 Parameters
 """
+small_map = False
 mesh_radius = 3
-first_factory = False
 unit_limit = 100
 run_threshold = 3
 unit_weight = {
@@ -143,8 +143,9 @@ def get_direction(loc):
 Unit Spawning
 """
 def count_unit():
-    global fight_loc
+    global fight_loc, rocket_loc
     fight_loc = []
+    rocket_loc = []
     for u in unit_types:
         if u in params:
             params[u]["count"] = 0
@@ -156,6 +157,8 @@ def count_unit():
                 params[u.unit_type]["count"] += 1
             if u.unit_type in buildings:
                 buildings[u.unit_type]["count"] +=1
+            if u.unit_type == bc.UnitType.Rocket:
+                rocket_loc.append( u.location.map_location() )
             if u.health < u.max_health and u.unit_type != bc.UnitType.Factory and u.unit_type != bc.UnitType.Rocket:
                 fight_loc.append(u.location.map_location())
 
@@ -164,7 +167,9 @@ def next_unit():
     units = []
     for k in params:
         c = params[k]["count"]
-        units.append( (k, c/params[k]["ratio"]) )
+        r = params[k]["ratio"]
+        if r != 0:
+            units.append( (k, c/r) )
     nu = min(units, key = lambda t: t[1])[0]
 
 """
@@ -289,9 +294,9 @@ def closest_enemy(u, nearby_en):
         return None
 
 def worst_enemy(u, nearby_at):
-    for n in nearby_at:
-        if n in fight_en:
-            return n
+    # for n in nearby_at:
+    #     if n in fight_en:
+    #         return n
     en = []
     for n in nearby_at:
         if n.location.is_on_map():
@@ -306,7 +311,7 @@ def worst_enemy(u, nearby_at):
 Pathfinding
 """
 def group_up(u, nearby_fr): # Workers to head toward factories
-    if len(nearby_fr) >= min(4, len(gc.my_units())):
+    if len(nearby_fr) >= min(3, len(gc.my_units())):
         return True
 
     if gc.is_move_ready(u.id):
@@ -320,7 +325,7 @@ def run_away(u, nearby_en): # Run away from enemy troops toward safety
     if gc.is_move_ready(u.id):
         loc = u.location.map_location()
         if len(nearby_en) > 0:
-            en = closest_enemy(u, nearby_en)
+            en = worst_enemy(u, nearby_en)
 
             if en and en.unit_type != bc.UnitType.Worker and en.unit_type != bc.UnitType.Factory and en.unit_type != bc.UnitType.Rocket:
                 r = en.attack_range()
@@ -393,14 +398,13 @@ def build_structures(u, nearby_fr):
     return False
 
 def blueprint_factory(u):
-    if gc.round() < 50 and u != root:
+    if gc.round() < 20 and u != root:
         return
     if gc.karbonite() >= bc.UnitType.Factory.blueprint_cost():
         loc = u.location.map_location()
 
         d = loc.direction_to(root.location.map_location())
         blueprint_out(u, d, bc.UnitType.Factory)
-        first_factory = True
 
 def blueprint_rocket(u):
     if gc.karbonite() >= bc.UnitType.Rocket.blueprint_cost():
@@ -430,8 +434,13 @@ def worker(u):
         nearby_fr = gc.sense_nearby_units_by_team(u.location.map_location(), u.vision_range, my_team)
         nearby_rocket = gc.sense_nearby_units_by_type(u.location.map_location(), 2, bc.UnitType.Rocket)
 
-        if nu == bc.UnitType.Worker and params[nu]["count"] <= params[nu]["cap"]:
-            replicate_worker(u)
+        if not small_map and gc.round() < 50:
+            if params[bc.UnitType.Worker]["count"] <= params[bc.UnitType.Worker]["cap"]:
+                replicate_worker(u)
+                params[bc.UnitType.Worker]["count"] += 1
+        else:
+            if nu == bc.UnitType.Worker and params[nu]["count"] <= params[nu]["cap"]:
+                replicate_worker(u)
 
         if not run_away(u, nearby_en):
 
@@ -465,7 +474,7 @@ Troops
 
 def guard(u, nearby_fr):
     if gc.is_move_ready(u.id):
-        if len(nearby_fr) <= 1:
+        if len(nearby_fr) <= 2:
             if root:
                 d = u.location.map_location().direction_to( root.location.map_location() )
                 spread_out(u, d)
@@ -476,7 +485,7 @@ def guard(u, nearby_fr):
         dist = [ (fr, u.location.map_location().distance_squared_to( fr.location.map_location() )) for fr in nearby_fr if fr != u]
         fr = min(dist, key = lambda t: t[1])
 
-        if fr[1] <= 2:
+        if fr[1] <= 3:
             d = u.location.map_location().direction_to( fr[0].location.map_location() ).opposite()
             spread_out(u, d)
             return
@@ -495,7 +504,7 @@ def battle(u, en):
     except:
         pass
 
-    if dist >= u.attack_range():
+    if dist > u.attack_range():
         if gc.is_move_ready(u.id):
             d = u.location.map_location().direction_to( en.location.map_location() )
             spread_out(u, d)
@@ -505,7 +514,7 @@ def battle(u, en):
             if en not in fight_en:
                 fight_en.append(en)
 
-    elif u.attack_range() > ran and dist > ran+1:
+    elif dist > ran+1:
         if gc.is_attack_ready(u.id) and gc.can_attack(u.id, en.id):
             gc.attack(u.id, en.id)
             if en not in fight_en:
@@ -762,7 +771,6 @@ def emergency_launch(u, nearby_en, garrison):
 
         if loc:
             if gc.can_launch_rocket(u.id, loc):
-                rocket_loc.remove(u.location.map_location())
                 gc.launch_rocket(u.id, loc)
 
                 return True
@@ -777,7 +785,6 @@ def launch_rocket(u, garrison):
 
             if loc:
                 if gc.can_launch_rocket(u.id, loc):
-                    rocket_loc.remove(u.location.map_location())
                     gc.launch_rocket(u.id, loc)
 
 def rocket(u):
@@ -786,9 +793,6 @@ def rocket(u):
         garrison = u.structure_garrison()
 
         if gc.planet() == bc.Planet.Earth:
-            if u.location.map_location() not in rocket_loc:
-                rocket_loc.append( u.location.map_location() )
-
             if not emergency_launch(u, nearby_en, garrison):
                 launch_rocket(u, garrison)
         else:
@@ -814,19 +818,23 @@ def determine_root():
     return root
 
 def tweak_parameters(planet_map):
-    if planet_map.width < 30:
-        params[bc.UnitType.Knight]["ratio"] = 0.5
+    global small_map
+    if planet_map.width < 25:
+        small_map = True
+        params[bc.UnitType.Knight]["ratio"] = 0.4
+    if planet_map.width > 30:
+        params[bc.UnitType.Knight]["ratio"] = 0
 
 def manage_upgrades(planet_map):
     upgrades = []
-    if planet_map.width < 30:
+    if planet_map.width < 25:
         upgrades = [
         bc.UnitType.Knight, #25
-        bc.UnitType.Knight, #75
-        bc.UnitType.Healer, #25
         bc.UnitType.Ranger, #25
+        bc.UnitType.Healer, #25
         bc.UnitType.Mage, #25
         bc.UnitType.Rocket, #100
+        bc.UnitType.Knight, #75
         bc.UnitType.Mage, #75
         bc.UnitType.Healer, #100
         bc.UnitType.Ranger, #100
