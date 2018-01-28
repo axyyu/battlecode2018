@@ -434,13 +434,14 @@ def worker(u):
         nearby_fr = gc.sense_nearby_units_by_team(u.location.map_location(), u.vision_range, my_team)
         nearby_rocket = gc.sense_nearby_units_by_type(u.location.map_location(), 2, bc.UnitType.Rocket)
 
-        if not small_map and gc.round() < 50:
-            if params[bc.UnitType.Worker]["count"] <= params[bc.UnitType.Worker]["cap"]:
-                replicate_worker(u)
-                params[bc.UnitType.Worker]["count"] += 1
-        else:
-            if nu == bc.UnitType.Worker and params[nu]["count"] <= params[nu]["cap"]:
-                replicate_worker(u)
+        if gc.planet() == bc.Planet.Earth:
+            if not small_map and gc.round() < 50 and u == root:
+                if params[bc.UnitType.Worker]["count"] <= params[bc.UnitType.Worker]["cap"]:
+                    replicate_worker(u)
+                    params[bc.UnitType.Worker]["count"] += 1
+            else:
+                if nu == bc.UnitType.Worker and params[nu]["count"] <= params[nu]["cap"]:
+                    replicate_worker(u)
 
         if not run_away(u, nearby_en):
 
