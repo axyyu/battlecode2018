@@ -820,7 +820,7 @@ def determine_root():
 
 def tweak_parameters(planet_map):
     global small_map
-    if planet_map.width < 25:
+    if sum( [ len(gc.len(gc.sense_nearby_units_by_team( u.location.map_location(), u.vision_range, op_team ))) for u in gc.my_team() ] ):
         small_map = True
         params[bc.UnitType.Knight]["ratio"] = 0.4
     if planet_map.width > 30:
